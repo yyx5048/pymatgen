@@ -9,7 +9,7 @@ from monty.json import MSONable
 
 from pymatgen.core import PeriodicSite
 from pymatgen.analysis.bond_valence import BVAnalyzer
-from pymatgen.analysis.defects.core import Vacancy, Interstitial, Substitution
+from pymatgen.analysis.defects.core import Vacancy, Interstitial, Substitution, ComplexMV
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.analysis.defects.utils import StructureMotifInterstitial, TopographyAnalyzer
 from pymatgen.analysis.structure_matcher import PointDefectComparator
@@ -301,3 +301,35 @@ class SimpleChargeGenerator(DefectGenerator):
             return defect
         else:
             raise StopIteration
+
+
+class ComplexMVGenerator:
+    from pymatgen.analysis.defects.generators import VacancyGenerator, SubstitutionGenerator
+
+    def __init__(self, structure, element):
+        # TODO: self.include_BV_charge
+        # BV charge from vacancy
+        # substitutional maintain charge neutral
+
+        self.structure = structure
+        self.element = element
+        self.subgen = SubstitutionGenerator(self.structure, self.element)
+        self.vacgen = VacancyGenerator(self.structure)
+
+        self.MV_defect_list = []
+
+        sub_list = [sub for sub in self.subgen]
+        vac_list = [vac for vac in self.vacgen]
+
+        for sub in sub_list:
+            for vac in vac_list:
+                self.MV_defect_list.append((sub, vac))
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if len(self.MV_defect_list) > 0:
+            sub, vac = self.MV_defect_list.pop(0)
+            return ComplexMV(sub, vac)
+        raise StopIteration

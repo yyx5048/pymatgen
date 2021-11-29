@@ -272,6 +272,126 @@ class Substitution(Defect):
         return "Sub_{}_on_{}_mult{}".format(self.site.specie, self.bulk_structure[defindex].specie, self.multiplicity)
 
 
+class ComplexMV(MSONable):
+
+    def __init__(self, substitution, vacancy):
+        self.substitution = substitution
+        self.vacancy = vacancy
+
+        if substitution.bulk_structure != vacancy.bulk_structure:
+            raise ValueError("bulk structure for substitution and vacancy are not the same.")
+        self.bulk_structure = self.substitution.bulk_structure
+        self.charge = self.substitution.charge + self.vacancy.charge
+        self.site = [self.substitution.site, self.vacancy.site]
+
+        self.multiplicity = self.substitution.get_multiplicity() * self.vacancy.get_multiplicity()
+
+    def get_multiplicity(self):
+        return self.multiplicity
+
+    def set_charge(self, new_charge):
+        self.charge = int(new_charge)
+
+    @property
+    def defect_composition(self):
+        temp_comp = self.bulk_structure.composition.as_dict()
+        temp_comp[str(self.vacancy.site.specie)] -= 1
+        temp_comp[str(self.substitution.site.specie)] += 1
+        return Composition(temp_comp)
+
+    def generate_defect_structure(self, supercell=(1, 1, 1)):
+
+        defect_structure = self.bulk_structure.copy()
+        defect_structure.make_supercell(supercell)
+
+        struct_for_vac_site = Structure(
+            self.bulk_structure.copy().lattice,
+            [self.vacancy.site.specie],
+            [self.vacancy.site.frac_coords],
+            to_unit_cell=True,
+        )
+
+        struct_for_sub_site = Structure(
+            self.bulk_structure.copy().lattice,
+            [self.substitution.site.specie],
+            [self.substitution.site.frac_coords],
+            to_unit_cell=True,
+        )
+
+        struct_for_vac_site.make_supercell(supercell)
+        struct_for_sub_site.make_supercell(supercell)
+
+        # these are used to construct site
+        vac_site = struct_for_vac_site[0]
+        sub_site = struct_for_sub_site[0]
+
+        vac_poss_deflist = sorted(
+            defect_structure.get_sites_in_sphere(vac_site.coords, 0.1, include_index=True),
+            key=lambda x: x[1],
+        )
+
+        vac_index_in_struct = vac_poss_deflist[0][2]
+        vac_site_in_struct = vac_poss_deflist[0][0]
+
+        # find the substitutional index:
+        sub_poss_deflist = sorted(
+            defect_structure.get_sites_in_sphere(sub_site.coords, 0.1, include_index=True),
+            key=lambda x: x[1],
+        )
+
+        temp_sub_site = sub_poss_deflist[0][0]
+
+        sga = SpacegroupAnalyzer(defect_structure)
+        sgop = sga.get_space_group_operations()
+
+        symm_equiv_sub_list = [site for site in defect_structure
+                               if sgop.are_symmetrically_equivalent([temp_sub_site], [site])]
+        mv_dist_list = [vac_site_in_struct.distance(site) for site in symm_equiv_sub_list]
+
+        dist = np.inf
+        sub_index_in_struct = None
+        for idx, tmp_dist in enumerate(mv_dist_list):
+            if 0 < tmp_dist < dist:
+                dist = tmp_dist
+                sub_index_in_struct = idx
+
+        if not sub_index_in_struct:
+            raise ValueError("Supercell size is too small, try to increase the cell size.")
+        sub_site_in_struct = symm_equiv_sub_list[sub_index_in_struct]
+
+        # generate vacancy first
+        defect_structure.remove_sites([vac_index_in_struct])
+        # Now generate substitution
+
+        poss_deflist = sorted(
+            defect_structure.get_sites_in_sphere(sub_site_in_struct.coords, 0.1, include_index=True),
+            key=lambda x: x[1],
+        )
+        # TODO: rename the variable sub_index_in_struct
+        sub_index_in_struct = poss_deflist[0][2]
+
+        subsite = defect_structure.pop(sub_index_in_struct)
+        defect_structure.append(
+            self.substitution.site.specie.symbol,
+            subsite.coords,
+            coords_are_cartesian=True,
+            properties=None,
+        )
+        defect_structure.set_charge(self.charge)
+
+        return defect_structure
+
+    @property
+    def name(self):
+        # TODO: find defindex
+        sub_name = self.substitution.name.split("_mult")
+        vac_name = self.vacancy.name.split("_mult")
+        return f"{sub_name[0]}_{vac_name[0]}_mult{self.multiplicity}"
+
+    def copy(self):
+        return self.from_dict(self.as_dict())
+
+
 class Interstitial(Defect):
     """
     Subclass of Defect to capture essential information for a single Interstitial defect structure.
